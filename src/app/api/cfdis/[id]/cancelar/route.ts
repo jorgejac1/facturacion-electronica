@@ -27,12 +27,12 @@ export async function POST(
   }
 
   try {
-    const resultado = await cancelar(
-      cfdi.uuid,
-      cfdi.emisor.rfc,
-      body.motivo,
-      body.folioSustitucion
-    )
+    const resultado = await cancelar({
+      uuid: cfdi.uuid,
+      rfcEmisor: cfdi.emisor.rfc,
+      motivo: body.motivo,
+      folioSustitucion: body.folioSustitucion,
+    })
 
     const updated = await prisma.cfdi.update({
       where: { id },

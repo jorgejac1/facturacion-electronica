@@ -20,10 +20,14 @@ Sistema integral de gestión de Comprobantes Fiscales Digitales por Internet (CF
   - [Incidencias y SLA](#7-incidencias-y-sla)
   - [Reportes Mensuales](#8-reportes-mensuales)
   - [Configuración PAC](#9-configuración-pac)
+- [Integración PAC (Provider Pattern)](#integración-pac-provider-pattern)
 - [API Reference](#api-reference)
 - [Componentes UI](#componentes-ui)
 - [Instalación y Setup](#instalación-y-setup)
 - [Datos de Demostración](#datos-de-demostración)
+- [Integraciones Pendientes](#integraciones-pendientes)
+- [Features Pendientes](#features-pendientes)
+- [Configuraciones Pendientes](#configuraciones-pendientes)
 
 ---
 
@@ -74,22 +78,24 @@ Sistema integral de gestión de Comprobantes Fiscales Digitales por Internet (CF
 │  /api/incidencias/*   Incidencias con cálculo SLA             │
 │  /api/dashboard       KPIs agregados                          │
 │  /api/reportes        Generación de reportes mensuales        │
+│  /api/pac/info        Info del proveedor PAC activo           │
 └───────────────────────────┬─────────────────────────────────┘
                             │
                   ┌─────────┼─────────┐
                   │         │         │
                   ▼         ▼         ▼
-           ┌──────────┐ ┌──────┐ ┌──────────┐
-           │  Prisma   │ │ PAC  │ │ NextAuth │
-           │  Client   │ │Client│ │  (JWT)   │
-           │(Singleton)│ │(Mock)│ │          │
-           └─────┬─────┘ └──────┘ └──────────┘
-                 │
-                 ▼
-           ┌──────────┐
-           │PostgreSQL │
-           │    DB     │
-           └──────────┘
+           ┌──────────┐ ┌──────────────────┐ ┌──────────┐
+           │  Prisma   │ │   PAC Provider   │ │ NextAuth │
+           │  Client   │ │   (Selectable)   │ │  (JWT)   │
+           │(Singleton)│ │                  │ │          │
+           └─────┬─────┘ │  ┌────────────┐ │ └──────────┘
+                 │        │  │    Mock    │ │
+                 ▼        │  │ (default)  │ │
+           ┌──────────┐  │  ├────────────┤ │
+           │PostgreSQL │  │  │  Factura   │ │
+           │    DB     │  │  │  Digital   │ │
+           └──────────┘  │  └────────────┘ │
+                          └──────────────────┘
 ```
 
 ### Decisiones Arquitectónicas Clave
@@ -102,7 +108,7 @@ Sistema integral de gestión de Comprobantes Fiscales Digitales por Internet (CF
 
 4. **Sesión extendida**: JWT enriquecido con `id` y `role` del usuario a través de callbacks en NextAuth, propagados a la sesión del cliente.
 
-5. **PAC Mock**: El cliente PAC (`src/lib/pac/client.ts`) es un mock para sandbox que simula timbrado/cancelación. En producción se reemplaza con la integración real al PAC autorizado.
+5. **PAC Provider Pattern**: El cliente PAC usa un patrón de providers intercambiables (`src/lib/pac/`). Se selecciona el proveedor vía `PAC_PROVIDER` env var. Actualmente soporta: `mock` (default) y `factura-digital` (Factura Digital / FacturoPorTi API REST v5). Agregar un nuevo PAC solo requiere implementar la interfaz `PacProvider`.
 
 6. **Server Components + Client Components**: Las páginas usan `'use client'` para interactividad. Los API routes manejan toda la lógica de negocio server-side.
 
@@ -154,7 +160,9 @@ facturacion-electronica/
 │   │       │   ├── route.ts              # GET + POST
 │   │       │   └── [id]/route.ts         # GET + PATCH (con SLA auto)
 │   │       ├── dashboard/route.ts        # GET → KPIs agregados
-│   │       └── reportes/route.ts         # GET + generate
+│   │       ├── reportes/route.ts         # GET + generate
+│   │       └── pac/
+│   │           └── info/route.ts         # GET → proveedor PAC activo
 │   ├── components/
 │   │   ├── layout/
 │   │   │   ├── dashboard-layout.tsx  # Sidebar + Topbar + contenido
@@ -174,7 +182,10 @@ facturacion-electronica/
 │   │   ├── prisma.ts         # Prisma singleton con PrismaPg adapter
 │   │   ├── utils.ts          # cn(), formatCurrency(), formatRFC(), etc.
 │   │   └── pac/
-│   │       └── client.ts     # Mock PAC: timbrar(), cancelar(), validarEstatus()
+│   │       ├── types.ts                     # Interfaces: PacProvider, TimbradoRequest, etc.
+│   │       ├── client.ts                    # Selector de provider + API pública
+│   │       ├── mock-provider.ts             # Mock PAC (default, desarrollo)
+│   │       └── factura-digital-provider.ts  # Factura Digital API REST v5
 │   ├── types/
 │   │   └── next-auth.d.ts    # Extensión de tipos: User + Session + JWT con role
 │   └── middleware.ts          # Auth guard por cookie
@@ -431,15 +442,15 @@ CFDI PENDIENTE → Llamada a PAC (timbrar) → Respuesta con UUID + sellos
                                           - xmlTimbrado
 ```
 
-El cliente PAC (`src/lib/pac/client.ts`) actualmente es un **mock para sandbox** que genera datos simulados. En producción se integra con el PAC autorizado real.
+El sistema usa un **patrón de providers intercambiables** (ver [Integración PAC](#integración-pac-provider-pattern)). Por default usa el Mock; para producción se activa Factura Digital con variables de entorno.
 
-**Datos generados por el PAC**:
+**Datos retornados por el PAC**:
 - UUID fiscal v4
 - Sello del CFD (base64)
 - Sello del SAT (base64)
 - Número de certificado SAT
 - Cadena original del timbre
-- XML del Timbre Fiscal Digital
+- XML completo del CFDI timbrado (estructura Anexo 20 v4.0)
 
 ---
 
@@ -618,6 +629,11 @@ Configuración del proveedor PAC (Proveedor Autorizado de Certificación):
 | GET | `/api/reportes` | Listar reportes | `?limit=12` |
 | GET | `/api/reportes` | Generar reporte | `?mes=3&anio=2026&generate=true` |
 
+### PAC
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/api/pac/info` | Proveedor PAC activo (nombre, tipo) |
+
 ---
 
 ## Componentes UI
@@ -716,6 +732,164 @@ La aplicación estará disponible en `http://localhost:3000`.
 - **13 incidencias**: Mix de prioridades y estados, con categorías variadas
 - **5 reportes mensuales**: Octubre 2025 – Febrero 2026
 - **1 configuración PAC**: Proveedor demo en modo sandbox
+
+---
+
+## Integración PAC (Provider Pattern)
+
+El sistema de timbrado usa un **patrón de providers intercambiables** que permite cambiar de PAC sin modificar código:
+
+### Arquitectura
+
+```
+src/lib/pac/
+├── types.ts                     # Interfaz PacProvider + tipos compartidos
+├── client.ts                    # Selector de provider (singleton) + API pública
+├── mock-provider.ts             # Mock para desarrollo (default)
+└── factura-digital-provider.ts  # Factura Digital / FacturoPorTi API REST v5
+```
+
+### Interfaz PacProvider
+
+Cualquier proveedor PAC debe implementar:
+
+```typescript
+interface PacProvider {
+  nombre: string
+  timbrar(request: TimbradoRequest): Promise<TimbradoResult>
+  cancelar(request: CancelacionRequest): Promise<CancelacionResult>
+  validarEstatus(request: EstatusRequest): Promise<EstatusResult>
+}
+```
+
+### TimbradoRequest (datos enviados al PAC)
+
+El request incluye datos completos del CFDI: emisor (RFC, razón social, régimen), receptor (RFC, razón social, régimen, uso CFDI), comprobante (serie, folio, fecha, tipo, método/forma pago, moneda, totales) y conceptos (clave SAT, cantidad, unidad, descripción, precio, IVA).
+
+### Providers disponibles
+
+| Provider | `PAC_PROVIDER` | Uso | API |
+|----------|---------------|-----|-----|
+| **Mock** | `mock` (default) | Desarrollo y pruebas | Genera datos simulados con XML CFDI 4.0 |
+| **Factura Digital** | `factura-digital` | Sandbox y producción | REST v5 — `POST /servicios/timbrar/json`, `POST /servicios/cancelar/csd`, `POST /validar/estatuscfdi` |
+
+### Configuración por variables de entorno
+
+```env
+# ─── Mock (default, no requiere nada) ────────────────
+# PAC_PROVIDER=mock
+
+# ─── Factura Digital ─────────────────────────────────
+PAC_PROVIDER=factura-digital
+PAC_API_KEY=tu-api-key
+PAC_API_SECRET=tu-api-secret
+PAC_SANDBOX=true
+PAC_SANDBOX_URL=https://testapi.facturoporti.com.mx    # opcional
+PAC_API_URL=https://api.facturoporti.com.mx            # opcional, producción
+```
+
+### Factura Digital — Flujo de autenticación
+
+```
+GET /token (API Key + Secret en headers)
+     ↓
+Bearer Token (válido 1 hora, cache automático)
+     ↓
+POST /servicios/timbrar/json (con Bearer token)
+```
+
+### Cómo agregar un nuevo PAC
+
+1. Crear `src/lib/pac/nuevo-provider.ts` implementando `PacProvider`
+2. Agregar el case en `src/lib/pac/client.ts` → `createProvider()`
+3. Configurar `PAC_PROVIDER=nuevo-provider` en `.env.local`
+
+---
+
+## Integraciones Pendientes
+
+| Integración | Descripción | Prioridad | Requisitos previos |
+|-------------|-------------|-----------|-------------------|
+| **Factura Digital (producción)** | Activar timbrado real con PAC autorizado | Alta | Registro en Factura Digital, obtener API Key y Secret, subir CSD |
+| **Certificados CSD** | Carga y gestión de certificados de sello digital (.cer, .key) | Alta | e.firma vigente del SAT, tramitar CSD en portal SAT (SOLCEDI) |
+| **Generación de PDF** | Generar representación impresa del CFDI (PDF) con logo y datos fiscales | Media | XML timbrado, plantilla PDF, librería de generación (puppeteer/pdfkit) |
+| **Envío por email** | Enviar XML + PDF al receptor automáticamente después del timbrado | Media | Servicio SMTP o API de email (SendGrid, Resend, etc.) |
+| **Descarga de XML** | Endpoint para descargar el XML timbrado del CFDI | Media | XML almacenado en BD (ya existe el campo `xmlTimbrado`) |
+| **Validación SAT en tiempo real** | Consultar estatus de CFDI directamente con el SAT | Baja | Endpoint `validarEstatus` del PAC (ya implementado en providers) |
+| **Integración contable (SAP/ERP)** | Exportar CFDIs timbrados al sistema contable | Baja | API del sistema contable, mapeo de campos, formato de exportación |
+| **Webhook/notificaciones** | Notificar eventos (timbrado, cancelación, error) a sistemas externos | Baja | URL de webhook destino, cola de reintentos |
+
+---
+
+## Features Pendientes
+
+| Feature | Descripción | Complejidad |
+|---------|-------------|-------------|
+| **Timbrado masivo** | Timbrar múltiples CFDIs en lote (carga CSV/Excel) con cola de procesamiento | Alta |
+| **Complemento de pago** | Soporte para CFDI tipo Pago (REP) con complemento de pagos 2.0 | Alta |
+| **CFDI de nómina** | Emisión de recibos de nómina con complemento nómina 1.2 | Alta |
+| **Carta porte** | Complemento Carta Porte 3.1 para CFDIs de traslado | Alta |
+| **Factura global** | Emisión de factura global para operaciones con público en general | Media |
+| **Notas de crédito** | Flujo de CFDI de egreso relacionado a un CFDI de ingreso | Media |
+| **Exportación de reportes** | Exportar reportes mensuales a Excel/PDF | Media |
+| **Auditoría (log de acciones)** | Registro de quién hizo qué, cuándo (timbró, canceló, creó) | Media |
+| **Búsqueda avanzada de CFDIs** | Filtros por rango de fecha, monto, RFC combinados | Baja |
+| **Notificaciones in-app** | Alertas de SLA próximo a vencer, CSD por expirar, errores de timbrado | Baja |
+| **Dashboard personalizable** | Widgets configurables por usuario/rol | Baja |
+| **Modo oscuro** | Tema oscuro para la interfaz | Baja |
+| **Permisos granulares** | Control de acceso por módulo (no solo por rol general) | Media |
+| **Multi-emisor** | Soporte para múltiples emisores (RFCs) en la misma instancia | Media |
+| **API pública con API Keys** | Exponer API para que sistemas externos generen CFDIs | Alta |
+
+---
+
+## Configuraciones Pendientes
+
+### Para pasar a producción
+
+| Configuración | Estado | Acción requerida |
+|---------------|--------|------------------|
+| **e.firma (FIEL)** | Pendiente | Tramitar ante el SAT (cita presencial) — requerido para obtener CSD |
+| **Certificado de Sello Digital (CSD)** | Pendiente | Generar con SOLCEDI usando la e.firma — archivos `.cer` + `.key` + contraseña |
+| **Registro en PAC** | Pendiente | Crear cuenta en Factura Digital (facturadigital.com.mx), subir CSD |
+| **Credenciales PAC** | Pendiente | Obtener API Key + Secret del portal del PAC → configurar en `.env.local` |
+| **PAC_PROVIDER** | `mock` | Cambiar a `factura-digital` cuando se tengan credenciales |
+| **PAC_SANDBOX** | `true` | Cambiar a `false` al pasar a producción |
+| **AUTH_SECRET** | Demo | Generar un secret seguro para producción (`openssl rand -base64 32`) |
+| **DATABASE_URL** | Local | Apuntar a PostgreSQL de producción (con SSL) |
+| **Dominio/HTTPS** | Pendiente | Configurar dominio con certificado SSL para producción |
+| **Compra de timbres** | Pendiente | Adquirir paquete de timbres en el PAC según volumen estimado |
+
+### Variables de entorno completas (producción)
+
+```env
+# Base de datos
+DATABASE_URL=postgresql://user:password@host:5432/facturacion_electronica?sslmode=require
+
+# Autenticación
+AUTH_SECRET=<secret-seguro-generado>
+NEXTAUTH_URL=https://facturacion.shp.gob.mx
+
+# PAC - Factura Digital
+PAC_PROVIDER=factura-digital
+PAC_API_KEY=<api-key-de-produccion>
+PAC_API_SECRET=<api-secret-de-produccion>
+PAC_SANDBOX=false
+PAC_API_URL=https://api.facturoporti.com.mx
+```
+
+### Pasos para activar timbrado real
+
+```
+1. Tramitar e.firma ante el SAT        → Área fiscal/legal de SHP
+2. Generar CSD con SOLCEDI             → Área fiscal/legal de SHP
+3. Registrarse en Factura Digital       → https://www.facturadigital.com.mx
+4. Subir CSD al portal del PAC         → Admin en portal Factura Digital
+5. Obtener API Key + Secret            → Portal Factura Digital → API → Datos de acceso
+6. Probar en sandbox                    → PAC_SANDBOX=true + credenciales
+7. Comprar paquete de timbres           → Portal Factura Digital → Tienda
+8. Cambiar a producción                 → PAC_SANDBOX=false
+```
 
 ---
 

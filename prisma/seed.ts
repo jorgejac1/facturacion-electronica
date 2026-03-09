@@ -197,7 +197,8 @@ async function main() {
           ...timbradoData,
           ...cancelData,
           conceptos: { create: conceptosData },
-        } as Record<string, unknown>,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
       })
 
       allCfdis.push({ id: cfdi.id, status })
@@ -228,7 +229,8 @@ async function main() {
   ]
 
   for (const inc of incidentsData) {
-    await prisma.incident.create({ data: inc as Record<string, unknown> })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await prisma.incident.create({ data: inc as any })
   }
   console.log(`${incidentsData.length} incidents created`)
 

@@ -1,21 +1,27 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Settings, Shield, Server, Key } from 'lucide-react'
+import { Settings, Shield, Server, Key, CheckCircle } from 'lucide-react'
 
 export default function ConfiguracionPage() {
   const [pacConfig, setPacConfig] = useState({
-    nombre: 'PAC Demo',
-    apiUrl: 'https://sandbox.pac-provider.com/api',
-    apiUrlSandbox: 'https://sandbox.pac-provider.com/api',
+    nombre: 'Factura Digital (FacturoPorTi)',
+    apiUrl: 'https://api.facturoporti.com.mx',
+    apiUrlSandbox: 'https://testapi.facturoporti.com.mx',
     apiKey: '••••••••••••',
     apiSecret: '••••••••••••',
     sandbox: true,
   })
+
+  const [providerInfo, setProviderInfo] = useState({ nombre: '', tipo: '' })
+
+  useEffect(() => {
+    fetch('/api/pac/info').then(r => r.json()).then(setProviderInfo).catch(() => {})
+  }, [])
 
   const [saving, setSaving] = useState(false)
 
@@ -36,9 +42,14 @@ export default function ConfiguracionPage() {
               </div>
               <CardTitle>Proveedor Autorizado de Certificación (PAC)</CardTitle>
             </div>
-            <Badge variant={pacConfig.sandbox ? 'warning' : 'success'}>
-              {pacConfig.sandbox ? 'Sandbox' : 'Producción'}
-            </Badge>
+            <div className="flex items-center gap-2">
+              {providerInfo.nombre && (
+                <Badge variant="info">{providerInfo.nombre}</Badge>
+              )}
+              <Badge variant={pacConfig.sandbox ? 'warning' : 'success'}>
+                {pacConfig.sandbox ? 'Sandbox' : 'Producción'}
+              </Badge>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
