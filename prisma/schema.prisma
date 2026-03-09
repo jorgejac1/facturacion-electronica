@@ -1,0 +1,265 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ───────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  OPERADOR
+  CONSULTOR
+}
+
+enum CfdiStatus {
+  PENDIENTE
+  TIMBRADO
+  CANCELADO
+  ERROR
+}
+
+enum CfdiTipo {
+  INGRESO
+  EGRESO
+  TRASLADO
+  NOMINA
+  PAGO
+}
+
+enum UsoCfdi {
+  G01 // Adquisición de mercancías
+  G02 // Devoluciones, descuentos o bonificaciones
+  G03 // Gastos en general
+  I01 // Construcciones
+  I02 // Mobiliario y equipo de oficina
+  I03 // Equipo de transporte
+  I04 // Equipo de cómputo
+  D01 // Honorarios médicos
+  D04 // Donativos
+  P01 // Por definir
+  S01 // Sin efectos fiscales
+  CP01 // Pagos
+}
+
+enum MetodoPago {
+  PUE // Pago en una sola exhibición
+  PPD // Pago en parcialidades o diferido
+}
+
+enum FormaPago {
+  EFECTIVO           // 01
+  CHEQUE_NOMINATIVO  // 02
+  TRANSFERENCIA      // 03
+  TARJETA_CREDITO    // 04
+  TARJETA_DEBITO     // 28
+  POR_DEFINIR        // 99
+}
+
+enum RegimenFiscal {
+  R601 // General de Ley Personas Morales
+  R603 // Personas Morales con Fines no Lucrativos
+  R605 // Sueldos y Salarios
+  R606 // Arrendamiento
+  R608 // Demás ingresos
+  R612 // Personas Físicas con Actividades Empresariales y Profesionales
+  R616 // Incorporación Fiscal
+  R625 // RESICO
+  R626 // RESICO Personas Morales
+}
+
+enum IncidentPriority {
+  ALTA
+  MEDIA
+  BAJA
+}
+
+enum IncidentStatus {
+  ABIERTO
+  EN_ATENCION
+  RESUELTO
+  CERRADO
+}
+
+// ─── Models ──────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      UserRole @default(OPERADOR)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cfdisCreated Cfdi[]     @relation("CfdiCreator")
+  incidents    Incident[] @relation("IncidentCreator")
+
+  @@map("users")
+}
+
+model Contribuyente {
+  id             String        @id @default(cuid())
+  rfc            String        @unique
+  razonSocial    String
+  regimenFiscal  RegimenFiscal
+  codigoPostal   String
+  email          String?
+  telefono       String?
+  active         Boolean       @default(true)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  cfdisEmitidos  Cfdi[] @relation("Emisor")
+  cfdisRecibidos Cfdi[] @relation("Receptor")
+
+  @@map("contribuyentes")
+}
+
+model Cfdi {
+  id              String      @id @default(cuid())
+  serie           String?
+  folio           String?
+  fecha           DateTime    @default(now())
+  tipo            CfdiTipo    @default(INGRESO)
+  status          CfdiStatus  @default(PENDIENTE)
+  usoCfdi         UsoCfdi     @default(G03)
+  metodoPago      MetodoPago  @default(PUE)
+  formaPago       FormaPago   @default(TRANSFERENCIA)
+  moneda          String      @default("MXN")
+  tipoCambio      Float       @default(1)
+  lugarExpedicion String      // CP del emisor
+  subtotal        Float
+  descuento       Float       @default(0)
+  totalImpuestos  Float       @default(0)
+  total           Float
+
+  // Timbrado (llenado por PAC)
+  uuid            String?     @unique
+  fechaTimbrado   DateTime?
+  selloCFD        String?     @db.Text
+  selloSAT        String?     @db.Text
+  noCertificadoSAT String?
+  cadenaOriginal  String?     @db.Text
+  xmlTimbrado     String?     @db.Text
+  pdfUrl          String?
+
+  // Cancelación
+  fechaCancelacion  DateTime?
+  motivoCancelacion String?
+  folioSustitucion  String?
+
+  // Relaciones
+  emisorId        String
+  emisor          Contribuyente @relation("Emisor", fields: [emisorId], references: [id])
+  receptorId      String
+  receptor        Contribuyente @relation("Receptor", fields: [receptorId], references: [id])
+  createdById     String
+  createdBy       User          @relation("CfdiCreator", fields: [createdById], references: [id])
+
+  conceptos       Concepto[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([emisorId])
+  @@index([receptorId])
+  @@index([fecha])
+  @@index([uuid])
+  @@map("cfdis")
+}
+
+model Concepto {
+  id              String @id @default(cuid())
+  claveProdServ   String
+  cantidad        Float
+  claveUnidad     String
+  unidad          String?
+  descripcion     String
+  valorUnitario   Float
+  importe         Float
+  descuento       Float  @default(0)
+  objetoImpuesto  String @default("02")
+
+  tasaIVA         Float? @default(0.16)
+  importeIVA      Float? @default(0)
+  tasaISR         Float?
+  importeISR      Float? @default(0)
+
+  cfdiId          String
+  cfdi            Cfdi   @relation(fields: [cfdiId], references: [id], onDelete: Cascade)
+
+  @@map("conceptos")
+}
+
+model Incident {
+  id              String           @id @default(cuid())
+  titulo          String
+  descripcion     String           @db.Text
+  priority        IncidentPriority
+  status          IncidentStatus   @default(ABIERTO)
+
+  fechaReporte    DateTime         @default(now())
+  fechaAtencion   DateTime?
+  fechaResolucion DateTime?
+  tiempoAtencionMinutos  Int?
+  tiempoResolucionMinutos Int?
+  cumpleSLA       Boolean?
+
+  categoria       String?
+  resolucion      String?          @db.Text
+
+  createdById     String
+  createdBy       User             @relation("IncidentCreator", fields: [createdById], references: [id])
+
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@index([status])
+  @@index([priority])
+  @@map("incidents")
+}
+
+model ReporteMensual {
+  id                  String   @id @default(cuid())
+  mes                 Int
+  anio                Int
+  totalTimbrados      Int      @default(0)
+  totalCancelados     Int      @default(0)
+  totalErrores        Int      @default(0)
+  montoTotal          Float    @default(0)
+  timbresConsumidos   Int      @default(0)
+  timbresDisponibles  Int      @default(0)
+  incidentesAlta      Int      @default(0)
+  incidentesMedia     Int      @default(0)
+  incidentesBaja      Int      @default(0)
+  cumplimientoSLA     Float    @default(0)
+  generadoEn          DateTime @default(now())
+
+  @@unique([mes, anio])
+  @@map("reportes_mensuales")
+}
+
+model ConfiguracionPAC {
+  id              String  @id @default(cuid())
+  nombre          String
+  apiUrl          String
+  apiUrlSandbox   String?
+  apiKey          String
+  apiSecret       String
+  certificadoPEM  String? @db.Text
+  llavePrivadaPEM String? @db.Text
+  passwordLlave   String?
+  sandbox         Boolean @default(true)
+  active          Boolean @default(true)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("configuracion_pac")
+}
